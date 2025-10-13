@@ -9,9 +9,9 @@ setup(
     description='Python library to scrape financial data from Casablanca Stock Exchange',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    author='ANDAM Amine and editor BOUAYAD Rayane',
-    author_email='bouayadr39@gmail.com',
-    url='https://github.com/Rayane3/BVCscrap',
+    author='ANDAM Amine and editor Ait benzekri Adel',
+    author_email='adelaitbenzekri@gmail.com',
+    url='https://github.com/ADELAITBENZEKRI/BVCscrap',
     license='MIT',
     packages=find_packages(include=["BVCscrap", "BVCscrap.*"]),
     install_requires=[
@@ -25,3 +25,4 @@ setup(
         "License :: OSI Approved :: MIT License",
     ],
 )
+
