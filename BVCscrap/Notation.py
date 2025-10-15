@@ -110,7 +110,7 @@ def notation_code():
  {'name': 'Ennakl', 'ISIN': 'MA0000011942'},
  {'name': 'EQDOM', 'ISIN': 'MA0000010357'},
  {'name': 'FENIE BROSSETTE', 'ISIN': 'MA0000011587'},
- {'name': 'HPS', 'ISIN': 'MA0000011611'},
+ {'name': 'HPS', 'ISIN': 'MA0000012619'},
  {'name': 'IBMaroc', 'ISIN': 'MA0000011132'},
  {'name': 'Immr Invest', 'ISIN': 'MA0000012387'},
  {'name': 'INVOLYS', 'ISIN': 'MA0000011579'},
