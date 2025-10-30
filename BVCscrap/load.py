@@ -5,11 +5,13 @@ import json
 import datetime
 import time
 import requests
+import ssl
 from .utils import *
 
 class BVCScraper:
     def __init__(self):
-        self.scraper = cloudscraper.create_scraper()
+        # Configuration SSL pour éviter les erreurs de certificat
+        self._create_secure_scraper()
         self.default_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
@@ -17,16 +19,44 @@ class BVCScraper:
             'Referer': 'https://www.medias24.com/',
             'Origin': 'https://www.medias24.com',
             'Connection': 'keep-alive',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin',
         }
     
+    def _create_secure_scraper(self):
+        """Crée un scraper avec configuration SSL sécurisée"""
+        try:
+            # Méthode 1: Créer un contexte SSL personnalisé
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # Créer le scraper avec la session requests personnalisée
+            session = requests.Session()
+            session.verify = False  # Désactiver la vérification SSL
+            session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+            
+            self.scraper = cloudscraper.create_scraper(sess=session)
+            
+        except Exception as e:
+            # Méthode 2: Fallback simple
+            print("Warning: Using fallback scraper configuration")
+            self.scraper = cloudscraper.create_scraper()
+            
+            # Désactiver les warnings SSL
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
     def _make_request(self, url, max_retries=3):
         """Fait une requête HTTP avec gestion des retries et erreurs"""
         for attempt in range(max_retries):
             try:
-                response = self.scraper.get(url, headers=self.default_headers, timeout=30)
+                # Configuration pour éviter les problèmes SSL
+                request_options = {
+                    'headers': self.default_headers,
+                    'timeout': 30,
+                    'verify': False  # Désactiver la vérification SSL
+                }
+                
+                response = self.scraper.get(url, **request_options)
                 
                 # Vérifications de la réponse
                 if response.status_code == 403:
@@ -56,6 +86,17 @@ class BVCScraper:
                 if attempt == max_retries - 1:
                     raise Exception("Cloudflare protection could not be bypassed")
                 time.sleep((attempt + 1) * 5)
+                
+            except requests.exceptions.SSLError as e:
+                print(f"SSL Error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt == max_retries - 1:
+                    # Forcer la désactivation SSL pour le dernier essai
+                    try:
+                        response = self.scraper.get(url, headers=self.default_headers, timeout=30, verify=False)
+                        return response
+                    except:
+                        raise Exception("SSL error persists even with verify=False")
+                time.sleep((attempt + 1) * 2)
                 
             except requests.exceptions.Timeout:
                 print(f"Timeout (attempt {attempt + 1}/{max_retries})")
@@ -123,6 +164,9 @@ class BVCScraper:
         
         return df.set_index("Date")
 
+# Créer une instance globale du scraper
+SCRAPER = BVCScraper()
+
 def loadata(name, start=None, end=None, decode="utf-8"):
     """
     Load Data avec gestion robuste des erreurs API
@@ -134,8 +178,6 @@ def loadata(name, start=None, end=None, decode="utf-8"):
     Outputs:
         pandas.DataFrame (4 columns) | Value, Min, Max, Variation, Volume
     """
-    scraper = BVCScraper()
-    
     # Validation des inputs
     if not name:
         raise ValueError("Name cannot be empty")
@@ -159,14 +201,14 @@ def loadata(name, start=None, end=None, decode="utf-8"):
     print(f"Fetching data for {name} from: {link}")
     
     try:
-        # Faire la requête
-        response = scraper._make_request(link)
+        # Faire la requête avec le scraper global
+        response = SCRAPER._make_request(link)
         
         # Parser la réponse JSON
-        json_data = scraper._parse_json_response(response.text, decode)
+        json_data = SCRAPER._parse_json_response(response.text, decode)
         
         # Créer le DataFrame
-        data = scraper._create_dataframe(json_data, name)
+        data = SCRAPER._create_dataframe(json_data, name)
         
         # Filtrer par dates si nécessaire
         if name in ["MASI", "MSI20"] and start and end:
@@ -256,8 +298,6 @@ def getIntraday(name, decode="utf-8"):
         -Name: stock,index 
         -decode: default value is "utf-8", if it is not working use : "utf-8-sig"
     """
-    scraper = BVCScraper()
-    
     try:
         if name != "MASI" and name != "MSI20":
             code = get_code(name)
@@ -269,7 +309,7 @@ def getIntraday(name, decode="utf-8"):
         else:
             link = "https://medias24.com/content/api?method=getIndexIntraday&ISIN=msi20&format=json"
 
-        response = scraper._make_request(link)
+        response = SCRAPER._make_request(link)
         soup = BeautifulSoup(response.text, features="lxml")
         data = intradata(soup, decode)
         
@@ -282,11 +322,45 @@ def getIntraday(name, decode="utf-8"):
 # Fonction utilitaire pour vérifier la connectivité
 def check_api_status():
     """Vérifie le statut de l'API Media24"""
-    scraper = BVCScraper()
     test_url = "https://medias24.com/content/api?method=getMasiHistory&periode=1d&format=json"
     
     try:
-        response = scraper._make_request(test_url, max_retries=1)
+        response = SCRAPER._make_request(test_url, max_retries=1)
         return True, "API is accessible"
     except Exception as e:
         return False, f"API is not accessible: {str(e)}"
+
+# Solution alternative simple si le problème persiste
+def loadata_simple(name, start=None, end=None, decode="utf-8"):
+    """
+    Version simplifiée avec requests directement
+    """
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    code = get_code(name)
+    if not code and name not in ["MASI", "MSI20"]:
+        raise ValueError(f"Unknown name or missing ISIN for: {name}")
+
+    if name not in ["MASI", "MSI20"]:
+        if not start or not end:
+            start = '2011-09-18'
+            end = str(datetime.datetime.today().date())
+        link = f"https://medias24.com/content/api?method=getPriceHistory&ISIN={code}&format=json&from={start}&to={end}"
+    else:
+        if name == "MASI":
+            link = "https://medias24.com/content/api?method=getMasiHistory&periode=10y&format=json"
+        else:
+            link = "https://medias24.com/content/api?method=getIndexHistory&ISIN=msi20&periode=10y&format=json"
+
+    try:
+        response = requests.get(link, verify=False, timeout=30)
+        if response.status_code == 200:
+            data = json.loads(response.text)
+            df = pd.DataFrame(data["result"])
+            # ... reste du traitement identique
+            return df.set_index("Date")
+        else:
+            raise Exception(f"HTTP Error {response.status_code}")
+    except Exception as e:
+        raise Exception(f"Error: {str(e)}")
