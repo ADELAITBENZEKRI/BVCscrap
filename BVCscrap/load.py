@@ -3,32 +3,129 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import json
 import datetime
-import ssl
-import urllib3
+import time
+import requests
 from .utils import *
 
-# Désactiver les warnings SSL et configurer le contexte
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+class BVCScraper:
+    def __init__(self):
+        self.scraper = cloudscraper.create_scraper()
+        self.default_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+            'Referer': 'https://www.medias24.com/',
+            'Origin': 'https://www.medias24.com',
+            'Connection': 'keep-alive',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+        }
+    
+    def _make_request(self, url, max_retries=3):
+        """Fait une requête HTTP avec gestion des retries et erreurs"""
+        for attempt in range(max_retries):
+            try:
+                response = self.scraper.get(url, headers=self.default_headers, timeout=30)
+                
+                # Vérifications de la réponse
+                if response.status_code == 403:
+                    raise Exception(f"Access forbidden (403). Possible blocage.")
+                elif response.status_code == 429:
+                    wait_time = (attempt + 1) * 10
+                    print(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                elif response.status_code != 200:
+                    raise Exception(f"HTTP Error {response.status_code}")
+                
+                if not response.text.strip():
+                    raise Exception("Empty response from API")
+                
+                if not response.text.strip().startswith('{'):
+                    # Vérifier si c'est une erreur HTML
+                    if '<html' in response.text.lower() or '<!doctype' in response.text.lower():
+                        raise Exception("API returned HTML instead of JSON. Possible anti-bot protection.")
+                    else:
+                        raise Exception("Invalid JSON response")
+                
+                return response
+                
+            except cloudscraper.exceptions.CloudflareChallengeError as e:
+                print(f"Cloudflare challenge detected (attempt {attempt + 1}/{max_retries})")
+                if attempt == max_retries - 1:
+                    raise Exception("Cloudflare protection could not be bypassed")
+                time.sleep((attempt + 1) * 5)
+                
+            except requests.exceptions.Timeout:
+                print(f"Timeout (attempt {attempt + 1}/{max_retries})")
+                if attempt == max_retries - 1:
+                    raise Exception("Request timeout after multiple attempts")
+                time.sleep((attempt + 1) * 3)
+                
+            except Exception as e:
+                print(f"Request failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep((attempt + 1) * 2)
+        
+        raise Exception("Max retries exceeded")
 
-# Configuration globale du scraper
-def create_secure_scraper():
-    """Crée un scraper configuré pour contourner les problèmes SSL"""
-    return cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'mobile': False
-        },
-        delay=10,
-        interpreter='nodejs'
-    )
+    def _parse_json_response(self, response_text, decode="utf-8"):
+        """Parse la réponse JSON avec gestion d'erreurs"""
+        try:
+            # Essayer le décodage standard
+            return json.loads(response_text.encode().decode(decode))
+        except UnicodeDecodeError:
+            # Essayer d'autres encodages
+            for encoding in ['utf-8-sig', 'latin-1', 'iso-8859-1']:
+                try:
+                    return json.loads(response_text.encode().decode(encoding))
+                except:
+                    continue
+            raise Exception("Could not decode API response with any encoding")
+        except json.JSONDecodeError as e:
+            print(f"Raw response preview: {response_text[:200]}...")
+            raise Exception(f"Invalid JSON format: {str(e)}")
 
-# Scraper global
-SCRAPER = create_secure_scraper()
+    def _create_dataframe(self, data, name):
+        """Crée le DataFrame à partir des données brutes"""
+        if not data or 'result' not in data or not data['result']:
+            raise Exception("No data found in API response")
+        
+        df = pd.DataFrame(data["result"])
+        
+        # Renommage des colonnes selon le type de données
+        if name in ["MASI", "MSI20"] and df.shape[1] == 2:
+            df.columns = ["Date", "Value"]
+        else:
+            if df.shape[1] == 6:
+                df.columns = ["Date", "Value", "Min", "Max", "Variation", "Volume"]
+            elif df.shape[1] == 2:
+                df.columns = ["Date", "Value"]
+            else:
+                # Adapter dynamiquement aux colonnes disponibles
+                print(f"Warning: Unexpected number of columns ({df.shape[1]}) for {name}")
+                df.columns = [f"Col_{i}" for i in range(df.shape[1])]
+        
+        # Conversion des dates
+        if pd.api.types.is_numeric_dtype(df["Date"]):
+            # Vérifier si c'est en secondes ou millisecondes
+            if df["Date"].max() > 1e10:  # Probablement en millisecondes
+                df["Date"] = pd.to_datetime(df["Date"], unit="ms", errors="coerce")
+            else:  # Probablement en secondes
+                df["Date"] = pd.to_datetime(df["Date"], unit="s", errors="coerce")
+        else:
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        
+        # Supprimer les lignes avec des dates invalides
+        df = df.dropna(subset=['Date'])
+        
+        return df.set_index("Date")
 
 def loadata(name, start=None, end=None, decode="utf-8"):
     """
-    Load Data 
+    Load Data avec gestion robuste des erreurs API
     Inputs: 
         name   | string | You must respect the notation. To see the notation see BVCscrap.notation()
         start  | string "YYYY-MM-DD" | starting date Must respect the notation
@@ -37,6 +134,12 @@ def loadata(name, start=None, end=None, decode="utf-8"):
     Outputs:
         pandas.DataFrame (4 columns) | Value, Min, Max, Variation, Volume
     """
+    scraper = BVCScraper()
+    
+    # Validation des inputs
+    if not name:
+        raise ValueError("Name cannot be empty")
+    
     code = get_code(name)
     if not code and name not in ["MASI", "MSI20"]:
         raise ValueError(f"Unknown name or missing ISIN for: {name}")
@@ -46,7 +149,6 @@ def loadata(name, start=None, end=None, decode="utf-8"):
         if not start or not end:
             start = '2011-09-18'
             end = str(datetime.datetime.today().date())
-
         link = f"https://medias24.com/content/api?method=getPriceHistory&ISIN={code}&format=json&from={start}&to={end}"
     else:
         if name == "MASI":
@@ -54,74 +156,31 @@ def loadata(name, start=None, end=None, decode="utf-8"):
         else:
             link = "https://medias24.com/content/api?method=getIndexHistory&ISIN=msi20&periode=10y&format=json"
 
+    print(f"Fetching data for {name} from: {link}")
+    
     try:
-        # Utilisation du scraper global avec gestion SSL
-        request_data = SCRAPER.get(link, verify=False, timeout=30)
+        # Faire la requête
+        response = scraper._make_request(link)
         
-        if request_data.status_code != 200:
-            raise ValueError(f"HTTP Error {request_data.status_code} for {name}")
-            
-        if not request_data.text.strip().startswith('{'):
-            raise ValueError(f"Bad API response for {name}: {request_data.text[:150]}")
-
-        data = get_data(request_data.text, decode)
-
+        # Parser la réponse JSON
+        json_data = scraper._parse_json_response(response.text, decode)
+        
+        # Créer le DataFrame
+        data = scraper._create_dataframe(json_data, name)
+        
+        # Filtrer par dates si nécessaire
         if name in ["MASI", "MSI20"] and start and end:
             data = produce_data(data, start, end)
-
+        
+        print(f"✓ Successfully loaded {len(data)} records for {name}")
         return data
         
     except Exception as e:
-        raise Exception(f"Error loading data for {name}: {str(e)}")
-
-def loadata_patch(name, start=None, end=None, decode="utf-8"):
-    """
-    Patch de bvc.loadata() qui gère le cas MASI/MSI20 avec dates en epoch ms.
-    """
-    code = get_code(name)
-    
-    # Construction de l'URL
-    if name not in ["MASI", "MSI20"]:
-        if not (start and end):
-            start = '2011-09-18'
-            end = str(datetime.date.today())
-        link = f"https://medias24.com/content/api?method=getPriceHistory&ISIN={code}&format=json&from={start}&to={end}"
-    else:
-        if name == "MASI":
-            link = "https://medias24.com/content/api?method=getMasiHistory&periode=10y&format=json"
-        else:
-            link = "https://medias24.com/content/api?method=getIndexHistory&ISIN=msi20&periode=10y&format=json"
-
-    try:
-        # Utilisation du scraper global
-        resp = SCRAPER.get(link, verify=False, timeout=30)
-        if resp.status_code != 200 or not resp.text.strip().startswith('{'):
-            raise ValueError(f"Bad API response for {name}: {resp.status_code}")
-
-        # Charger le JSON
-        table = json.loads(resp.text.encode().decode(decode))
-        df = pd.DataFrame(table["result"])
-
-        # Renommer les colonnes
-        if name in ["MASI", "MSI20"] and df.shape[1] == 2:
-            df.columns = ["Date", "Value"]
-        else:
-            df.columns = ["Date", "Value", "Min", "Max", "Variation", "Volume"]
-
-        # Conversion de la colonne Date
-        if pd.api.types.is_numeric_dtype(df["Date"]):
-            df["Date"] = pd.to_datetime(df["Date"], unit="ms", errors="coerce")  # Changé de 's' à 'ms'
-        else:
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-
-        return df.set_index("Date")
-        
-    except Exception as e:
-        raise Exception(f"Error in loadata_patch for {name}: {str(e)}")
+        raise Exception(f"Failed to load data for {name}: {str(e)}")
 
 def loadmany(*args, start=None, end=None, feature="Value", decode="utf-8"):
     """
-    Load the data of many equities  
+    Load the data of many equities avec gestion d'erreurs améliorée
     Inputs: 
         *args  | strings | You must respect the notation. To see the notation see BVCscrap.notation
         start  | string "YYYY-MM-DD" | starting date Must respect the notation
@@ -131,98 +190,103 @@ def loadmany(*args, start=None, end=None, feature="Value", decode="utf-8"):
     Outputs:
         pandas.DataFrame (len(args) columns) | close prices of selected equities
     """
+    if not args:
+        raise ValueError("No stocks provided")
+        
     if type(args[0]) == list:
         args = args[0]
-        
-    data = pd.DataFrame(columns=args)
     
-    for stock in args:
+    successful_data = {}
+    failed_stocks = []
+    
+    print(f"Loading data for {len(args)} stocks: {args}")
+    
+    for i, stock in enumerate(args):
         try:
-            value = loadata(stock, start, end, decode)
-            data[stock] = value[feature]
-        except Exception as e:
-            print(f"Warning: Could not load data for {stock}: {str(e)}")
-            continue
+            print(f"Progress: {i+1}/{len(args)} - Loading {stock}...")
             
-    return data
+            value = loadata(stock, start, end, decode)
+            
+            # Vérifier que la feature existe
+            if feature not in value.columns:
+                available_features = list(value.columns)
+                raise Exception(f"Feature '{feature}' not found. Available: {available_features}")
+            
+            successful_data[stock] = value[feature]
+            print(f"✓ Successfully loaded {stock} ({len(value)} records)")
+            
+            # Pause stratégique entre les requêtes
+            if i < len(args) - 1:  # Ne pas attendre après la dernière
+                time.sleep(1.5)
+            
+        except Exception as e:
+            error_msg = f"✗ Failed to load {stock}: {str(e)}"
+            print(error_msg)
+            failed_stocks.append((stock, str(e)))
+    
+    # Création du DataFrame final
+    if successful_data:
+        data = pd.DataFrame(successful_data)
+        
+        # Rapport final
+        print(f"\n{'='*50}")
+        print(f"LOADING SUMMARY:")
+        print(f"✓ Successful: {len(successful_data)} stocks")
+        if failed_stocks:
+            print(f"✗ Failed: {len(failed_stocks)} stocks")
+            for stock, error in failed_stocks:
+                print(f"  - {stock}: {error}")
+        print(f"{'='*50}")
+        
+        return data
+    else:
+        raise Exception(f"Failed to load all {len(args)} stocks")
+
+def loadata_patch(name, start=None, end=None, decode="utf-8"):
+    """
+    Patch de bvc.loadata() qui gère le cas MASI/MSI20 avec dates en epoch ms.
+    """
+    # Cette fonction utilise maintenant la nouvelle implémentation robuste
+    return loadata(name, start, end, decode)
 
 def getIntraday(name, decode="utf-8"):
     """
-    Load intraday data
+    Load intraday data avec gestion d'erreurs améliorée
     Inputs: 
-        - Name: stock, index 
-        - decode: default value is "utf-8", if it is not working use : "utf-8-sig"
+        -Name: stock,index 
+        -decode: default value is "utf-8", if it is not working use : "utf-8-sig"
     """
+    scraper = BVCScraper()
+    
     try:
-        # Construction de l'URL
-        if name not in ["MASI", "MSI20"]:
+        if name != "MASI" and name != "MSI20":
             code = get_code(name)
             if not code:
-                raise ValueError(f"Code not found for: {name}")
+                raise ValueError(f"Unknown stock: {name}")
             link = f"https://medias24.com/content/api?method=getStockIntraday&ISIN={code}&format=json"
         elif name == "MASI":
             link = "https://medias24.com/content/api?method=getMarketIntraday&format=json"
         else:
             link = "https://medias24.com/content/api?method=getIndexIntraday&ISIN=msi20&format=json"
 
-        # Utilisation du scraper global avec headers
-        request_data = SCRAPER.get(
-            link, 
-            verify=False,
-            timeout=30,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-                'Referer': 'https://medias24.com/'
-            }
-        )
-        
-        if request_data.status_code != 200:
-            raise ValueError(f"HTTP Error: {request_data.status_code}")
-            
-        # Vérification du contenu JSON
-        if not request_data.text.strip().startswith(('{', '[')):
-            raise ValueError(f"Invalid JSON response: {request_data.text[:100]}")
-            
-        soup = BeautifulSoup(request_data.text, features="lxml")
+        response = scraper._make_request(link)
+        soup = BeautifulSoup(response.text, features="lxml")
         data = intradata(soup, decode)
+        
+        print(f"✓ Successfully loaded intraday data for {name}")
         return data
         
-    except cloudscraper.CloudflareChallengeError as e:
-        raise Exception(f"Cloudflare challenge failed: {str(e)}")
-    except json.JSONDecodeError as e:
-        raise Exception(f"JSON decode error: {str(e)}")
     except Exception as e:
-        raise Exception(f"Error fetching intraday data for {name}: {str(e)}")
+        raise Exception(f"Failed to load intraday data for {name}: {str(e)}")
 
-def getCours(name, start=None, end=None, decode="utf-8"):
-    """
-    Fonction wrapper pour récupérer les cours - version corrigée SSL
-    """
-    return loadata(name, start, end, decode)
-
-# Fonction de test
-def test_connection():
-    """Teste la connexion avec les différents endpoints"""
-    test_cases = [
-        "BOA",
-        "MASI", 
-        "MSI20"
-    ]
+# Fonction utilitaire pour vérifier la connectivité
+def check_api_status():
+    """Vérifie le statut de l'API Media24"""
+    scraper = BVCScraper()
+    test_url = "https://medias24.com/content/api?method=getMasiHistory&periode=1d&format=json"
     
-    for test_case in test_cases:
-        try:
-            print(f"Testing {test_case}...")
-            if test_case in ["MASI", "MSI20"]:
-                data = getIntraday(test_case)
-            else:
-                data = getCours(test_case)
-            print(f"✓ {test_case}: SUCCESS - Shape: {data.shape}")
-        except Exception as e:
-            print(f"✗ {test_case}: ERROR - {str(e)}")
-
-# Si exécuté directement
-if __name__ == "__main__":
-    test_connection()
-	
+    try:
+        response = scraper._make_request(test_url, max_retries=1)
+        return True, "API is accessible"
+    except Exception as e:
+        return False, f"API is not accessible: {str(e)}"
