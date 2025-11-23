@@ -18,11 +18,13 @@ setup(
         'requests',
         'beautifulsoup4',
         'pandas',
-        'lxml'
+        'lxml' ,
+        'playwright'
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
     ],
 )
+
 
