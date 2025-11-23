@@ -1,125 +1,197 @@
-import requests 
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 from .utils import *
 
+
 def getCours(name):
     """
-         load : Session data, latest transaction, best limit and  data of the last 5 sessions
-
-         Input  | Type              |Description
-         ===============================================================================
-         name   | String            |Name of the company.You must respect the notation.
-                |                   |To g:et the notation : BVCscrap.notation()
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load session data, latest transaction, best limit and last 5 sessions.
     """
-    code=get_valeur(name) 
-    data={"__EVENTTARGET": "SocieteCotee1$LBIndicCle"}
-    headers =   {'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'}
-    link="https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur="+code+"&cat=7"
-    res = requests.post(link,data=data,headers=headers).content
-    soup = BeautifulSoup(res,'html.parser')
-    result= getTables(soup)
-    return result
+    code = get_valeur(name)
+    data = {"__EVENTTARGET": "SocieteCotee1$LBIndicCle"}
+    link = f"https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur={code}&cat=7"
 
-def getKeyIndicators(name,decode='utf-8'):
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+
+            # Simulation d'un POST via JS
+            page.evaluate(f"""
+                () => {{
+                    let form = document.querySelector('form');
+                    let input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = '__EVENTTARGET';
+                    input.value = '{data["__EVENTTARGET"]}';
+                    form.appendChild(input);
+                    form.submit();
+                }}
+            """)
+            page.wait_for_timeout(5000)  # attendre le chargement
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getTables(soup)
+    except Exception as e:
+        print(f"Erreur getCours: {e}")
+        return None
+
+
+def getKeyIndicators(name, decode='utf-8'):
     """
-         load : get key indicators
-
-         Input  | Type              |Description
-         ===============================================================================
-         name   | String            |Name of the company.You must respect the notation.
-                |                   |To get the notation : BVCscrap.notation()
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load key indicators of a company.
     """
-    code=get_valeur(name)
-    data={"__EVENTTARGET": "SocieteCotee1$LBFicheTech"}
-    headers =   {'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'}
-    link="https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur="+code+"&cat=7"
-    res = requests.post(link,data=data,headers=headers).content.decode(decode)
-    soup = BeautifulSoup(res,'html.parser')
-    result=getTablesFich(soup)
-    return result
+    code = get_valeur(name)
+    data = {"__EVENTTARGET": "SocieteCotee1$LBFicheTech"}
+    link = f"https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur={code}&cat=7"
 
-def getDividend(name,decode='utf-8'):
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+
+            page.evaluate(f"""
+                () => {{
+                    let form = document.querySelector('form');
+                    let input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = '__EVENTTARGET';
+                    input.value = '{data["__EVENTTARGET"]}';
+                    form.appendChild(input);
+                    form.submit();
+                }}
+            """)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getTablesFich(soup)
+    except Exception as e:
+        print(f"Erreur getKeyIndicators: {e}")
+        return None
+
+
+def getDividend(name, decode='utf-8'):
     """
-         load :get dividends
-
-         Input  | Type              |Description
-         ===============================================================================
-         name   | String            |Name of the company.You must respect the notation.
-                |                   |To get the notation : BVCscrap.notation()
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load dividends of a company.
     """
-    code=get_valeur(name)
-    data={"__EVENTTARGET": "SocieteCotee1$LBDividende"}
-    headers =   {'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'}
-    link="https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur="+code+"&cat=7"
-    res = requests.post(link,data=data,headers=headers).content.decode(decode)
-    soup = BeautifulSoup(res,'html.parser')
-    result=getDivi(soup)
-    return result
+    code = get_valeur(name)
+    data = {"__EVENTTARGET": "SocieteCotee1$LBDividende"}
+    link = f"https://www.casablanca-bourse.com/bourseweb/Societe-Cote.aspx?codeValeur={code}&cat=7"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+
+            page.evaluate(f"""
+                () => {{
+                    let form = document.querySelector('form');
+                    let input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = '__EVENTTARGET';
+                    input.value = '{data["__EVENTTARGET"]}';
+                    form.appendChild(input);
+                    form.submit();
+                }}
+            """)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getDivi(soup)
+    except Exception as e:
+        print(f"Erreur getDividend: {e}")
+        return None
+
 
 def getIndex():
     """
-         load : indexes summary
-
-         Input  | Type              |Description
-         ===============================================================================
-                |                   |
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load indexes summary.
     """
-    link="https://www.casablanca-bourse.com/bourseweb/Activite-marche.aspx?Cat=22&IdLink=297"
-    request= requests.Session()
-    code_soup= request.get(link,headers={'User-Agent': 'Mozilla/5.0'})
-    soup = BeautifulSoup(code_soup.content,features="lxml")
-    result=getAllIndex(soup)
-    return result
+    link = "https://www.casablanca-bourse.com/bourseweb/Activite-marche.aspx?Cat=22&IdLink=297"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getAllIndex(soup)
+    except Exception as e:
+        print(f"Erreur getIndex: {e}")
+        return None
+
 
 def getPond():
     """
-         load : weights(Pondération)
-
-         Input  | Type              |Description
-         ===============================================================================
-                |                   |
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load weights (Pondération).
     """
-    link="https://www.casablanca-bourse.com/bourseweb/indice-ponderation.aspx?Cat=22&IdLink=298"
-    request= requests.Session()
-    code_soup= request.get(link,headers={'User-Agent': 'Mozilla/5.0'})
-    soup = BeautifulSoup(code_soup.content,'html.parser')
-    return getPondval(soup)
+    link = "https://www.casablanca-bourse.com/bourseweb/indice-ponderation.aspx?Cat=22&IdLink=298"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getPondval(soup)
+    except Exception as e:
+        print(f"Erreur getPond: {e}")
+        return None
+
 
 def getIndexRecap():
     """
-         load : session recap
-
-         Input  | Type              |Description
-         ===============================================================================
-                |                   |
-
-         Output |Type               |Description
-         =====================================================
-                |Dictionary         | 
+    Load session recap.
     """
-    data={"TopControl1$ScriptManager1": "FrontTabContainer1$ctl00$UpdatePanel1|FrontTabContainer1$ctl00$ImageButton1"}
-    link="https://www.casablanca-bourse.com/bourseweb/index.aspx"
-    headers =   {'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'}
-    res = requests.post(link,data=data,headers=headers).content.decode('utf8')
-    soup = BeautifulSoup(res,'html.parser')
-    return getIndiceRecapScrap(soup)
+    data = {"TopControl1$ScriptManager1": "FrontTabContainer1$ctl00$UpdatePanel1|FrontTabContainer1$ctl00$ImageButton1"}
+    link = "https://www.casablanca-bourse.com/bourseweb/index.aspx"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(link, timeout=90000)
+
+            page.evaluate(f"""
+                () => {{
+                    let form = document.querySelector('form');
+                    let input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = 'TopControl1$ScriptManager1';
+                    input.value = '{data["TopControl1$ScriptManager1"]}';
+                    form.appendChild(input);
+                    form.submit();
+                }}
+            """)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        return getIndiceRecapScrap(soup)
+    except Exception as e:
+        print(f"Erreur getIndexRecap: {e}")
+        return None
