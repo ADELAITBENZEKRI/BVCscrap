@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm"]
+
+[project]
+name = "BVCscrap"
+dynamic = ["version"]
+dependencies = [
+    "requests",
+    "beautifulsoup4", 
+    "pandas",
+    "lxml",
+    "playwright"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8"
+]
